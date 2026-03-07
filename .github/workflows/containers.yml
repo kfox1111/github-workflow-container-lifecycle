@@ -99,6 +99,7 @@ jobs:
           os: ${{ matrix.os }}
           arch: ${{ matrix.arch }}
           repo: ${{ inputs.repo }}
+          certificate-identity: 'https://github.com/kfox1111/github-workflow-container-lifecycle/.github/workflows/containers.yml@refs/heads/v1'
 
       - name: Show updates
         run: |
