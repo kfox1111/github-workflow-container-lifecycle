@@ -1,0 +1,215 @@
+name: CI Build
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: The repo to upload to
+        type: string
+        required: false
+        default: "ghcr.io/${{ github.repository }}"
+      platforms:
+        description: "Space-separated list, e.g., 'linux/amd64 linux/arm64'"
+        type: string
+        required: false
+        default: "linux/amd64 linux/arm64"
+
+jobs:
+  timestamp:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Build timestamp
+        run: |
+          set -e
+          DATETAG=$(date -u +"%Y%m%d-%H%M%S")
+          echo "$DATETAG"
+          echo "$DATETAG" > timestamp.txt
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: timestamp.txt
+          path: timestamp.txt
+      - id: set-matrix
+        run: |
+          SUPPORTED='[
+            {"os":"linux","arch":"amd64","runner_label":"ubuntu-24.04"},
+            {"os":"linux","arch":"arm64","runner_label":"ubuntu-24.04-arm"}
+          ]'
+          
+          INPUT_STR="${{ inputs.platforms }}"
+          RESULT=$(echo "$SUPPORTED" | jq -c "[.[] | select(. as \$item | \"\\(\$item.os)/\\(\$item.arch)\" | inside(\"$INPUT_STR\"))]")
+          
+          echo "matrix=$RESULT" >> $GITHUB_OUTPUT
+  build:
+    needs:
+      - timestamp
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.timestamp.outputs.matrix) }}
+            
+    runs-on: ${{ matrix.runner_label }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download timestamp
+        uses: actions/download-artifact@v4
+        with:
+          name: timestamp.txt
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Crane
+        uses: imjasonh/setup-crane@v0.3
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.0
+        with:
+          cosign-release: 'v2.2.3'
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.23.0
+
+      - name: Install sbomlyze
+        run: |
+          set -e
+          mkdir -p /tmp/bin
+          curl -sSfL https://raw.githubusercontent.com/rezmoss/sbomlyze/main/install.sh | sh -s -- -b /tmp/bin
+          ls -l /tmp/bin
+          sudo mv /tmp/bin/sbomlyze /usr/bin
+
+      - name: build containers if changed
+        uses: kfox1111/container-build-and-refresh-action@main
+        id: build
+        with:
+          os: ${{ matrix.os }}
+          arch: ${{ matrix.arch }}
+          repo: ${{ inputs.repo }}
+
+      - name: Show updates
+        run: |
+          echo '${{ steps.build.outputs.updated }}' | jq .
+          echo '${{ steps.build.outputs.updated }}' > result-${{ matrix.os }}-${{ matrix.arch}}.json
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-results-${{ matrix.os }}-${{ matrix.arch }}
+          path: result-${{ matrix.os }}-${{ matrix.arch }}.json
+
+  combine:
+    needs:
+    - timestamp
+    - build
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Crane
+        uses: imjasonh/setup-crane@v0.5
+
+      - name: Download timestamp
+        uses: actions/download-artifact@v4
+        with:
+          name: timestamp.txt
+          merge-multiple: true
+
+      - name: Download ALL results
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+          pattern: build-results-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show updates
+        run: |
+          echo Updated contaienrs:
+          for x in all-results/*; do
+            jq -r .[] $x
+          done | uniq
+
+      - name: Get directory list
+        id: get-containers
+        shell: bash
+        run: |
+          TARGET_DIR="${{ inputs.directory }}"
+          if [ -z "$TARGET_DIR"]; then
+            TARGET_DIR="containers"
+          fi
+        
+          # Check if directory exists to avoid silent failure
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "::error::Directory $TARGET_DIR does not exist."
+            exit 1
+          fi
+
+          # Find folders, format as JSON array ["dir1", "dir2"]
+          DIRS=$(find "$TARGET_DIR" -maxdepth 1 -mindepth 1 -type d -printf '"%f",' | sed 's/,$//')
+        
+          echo "containers=[$DIRS]" >> $GITHUB_OUTPUT
+
+      - name: Safe Iterate JSON array
+        id: build
+        shell: bash
+        env:
+          CONTAINER_JSON: ${{ steps.get-containers.outputs.containers }}
+          COSIGN_YES: "true"
+        run: |
+          set -e
+          PLATFORM_LIST=$(echo "${{ inputs.platforms }}" | sed 's/\//-/g')
+          MAINTAG="latest"
+          DATETAG=$(cat timestamp.txt)
+          while read -r container; do
+            CONTAINER_NAME="${{ inputs.repo }}/$container"
+            echo "Buiding container: $container"
+            crane ls "$CONTAINER_NAME" > list
+            truncate inventory --size 0
+            truncate latest --size 0
+            for entry in $PLATFORM_LIST; do
+              NEWEST=$(grep "^$entry"'-[0-9]\{8\}-[0-9]\{6\}$' list | sort -t '-' -k3,3r -k4,4r | head -n 1)
+              echo Found newest $NEWEST
+              STAMP=$(echo "$NEWEST" | awk -F- '{print $3 "-" $4}')
+              echo "$NEWEST" >> inventory
+              echo "$STAMP" >> latest
+            done
+            echo inventory:
+            cat inventory
+            LATEST=$(grep '^[0-9]\{8\}-[0-9]\{6\}$' latest | sort -t '-' -k1,1r -k2,2r | head -n 1)
+            echo latest $LATEST
+
+            ARGS=()
+            while IFS= read -r TAG; do
+              ARGS+=("-m" "$CONTAINER_NAME:$TAG")
+            done < inventory
+            echo running: crane index append -t "$CONTAINER_NAME:$LATEST" "${ARGS[@]}"
+            crane index append -t "$CONTAINER_NAME:$LATEST" "${ARGS[@]}"
+            crane index append -t "$CONTAINER_NAME:latest" "${ARGS[@]}"
+
+          done <<< "$(echo $CONTAINER_JSON | jq -r '.[]')"
