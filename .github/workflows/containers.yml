@@ -13,6 +13,11 @@ on:
         type: string
         required: false
         default: "linux/amd64 linux/arm64"
+      postCheckoutBuildScript:
+        description: "Script to call after checkout during the building process"
+        type: string
+        required: false
+        default: ""
 
 jobs:
   timestamp:
@@ -91,6 +96,14 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/rezmoss/sbomlyze/main/install.sh | sh -s -- -b /tmp/bin
           ls -l /tmp/bin
           sudo mv /tmp/bin/sbomlyze /usr/bin
+
+      - name: Run Post Checkout Build Script
+        run: |
+          if [ "x${{ inputs.postCheckoutBuildScript }}" != "x" ]; then
+            chmod +x "./${{ inputs.postCheckoutBuildScript }}"
+            "./${{ inputs.postCheckoutBuildScript }}"
+            exit $?
+          fi
 
       - name: build containers if changed
         uses: kfox1111/container-build-and-refresh-action@main

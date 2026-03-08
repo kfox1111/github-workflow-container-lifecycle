@@ -35,7 +35,19 @@ jobs:
 
 ```
 
+You may run a script after the checkout, before the build like:
+```
+jobs:
+  build:
+    uses: kfox1111/github-workflow-container-lifecycle/.github/workflows/containers.yml@v1
+    with:
+      postCheckoutBuildScript: "setup.sh"
+```
+
 Add a containers directory. Make a subdirectory for each container image you want, and add a Dockerfile to each.
+
+Additional configuration options are documented here:
+https://github.com/kfox1111/container-build-and-refresh-action?tab=readme-ov-file#container-image-configuration
 
 It will output images in `ghcr.io/<yourorg>/<yourrepo>/<containername>`
 
