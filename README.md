@@ -19,7 +19,7 @@ permissions:
   contents: read
   packages: write
   id-token: write
-  
+
 jobs:
   build:
     uses: kfox1111/github-workflow-container-lifecycle/.github/workflows/containers.yml@v1

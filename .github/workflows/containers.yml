@@ -37,10 +37,10 @@ jobs:
             {"os":"linux","arch":"amd64","runner_label":"ubuntu-24.04"},
             {"os":"linux","arch":"arm64","runner_label":"ubuntu-24.04-arm"}
           ]'
-          
+
           INPUT_STR="${{ inputs.platforms }}"
           RESULT=$(echo "$SUPPORTED" | jq -c "[.[] | select(. as \$item | \"\\(\$item.os)/\\(\$item.arch)\" | inside(\"$INPUT_STR\"))]")
-          
+
           echo "matrix=$RESULT" >> $GITHUB_OUTPUT
   build:
     needs:
@@ -54,7 +54,7 @@ jobs:
     strategy:
       matrix:
         include: ${{ fromJSON(needs.timestamp.outputs.matrix) }}
-            
+
     runs-on: ${{ matrix.runner_label }}
 
     steps:
@@ -164,7 +164,7 @@ jobs:
           if [ -z "$TARGET_DIR"]; then
             TARGET_DIR="containers"
           fi
-        
+
           # Check if directory exists to avoid silent failure
           if [ ! -d "$TARGET_DIR" ]; then
             echo "::error::Directory $TARGET_DIR does not exist."
@@ -173,7 +173,7 @@ jobs:
 
           # Find folders, format as JSON array ["dir1", "dir2"]
           DIRS=$(find "$TARGET_DIR" -maxdepth 1 -mindepth 1 -type d -printf '"%f",' | sed 's/,$//')
-        
+
           echo "containers=[$DIRS]" >> $GITHUB_OUTPUT
 
       - name: Safe Iterate JSON array
