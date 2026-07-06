@@ -13,6 +13,10 @@ on:
         type: string
         required: false
         default: "linux/amd64 linux/arm64"
+      pre-build-script:
+        description: "Shell command to run before the build step"
+        type: string
+        required: false
 
 jobs:
   timestamp:
@@ -94,6 +98,11 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/rezmoss/sbomlyze/main/install.sh | sh -s -- -b /tmp/bin
           ls -l /tmp/bin
           sudo mv /tmp/bin/sbomlyze /usr/bin
+
+      - name: Run Pre-Build Hook
+        if: ${{ inputs.pre-build-script != '' }}
+        shell: bash
+        run: ${{ inputs.pre-build-script }}
 
       - name: build containers if changed
         uses: kfox1111/container-build-and-refresh-action@main
